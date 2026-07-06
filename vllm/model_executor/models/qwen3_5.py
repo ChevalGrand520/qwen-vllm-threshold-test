@@ -107,6 +107,15 @@ from .utils import (
     maybe_prefix,
 )
 
+from vllm.config import (
+    CacheConfig,
+    ModelConfig,
+    SpeculativeConfig,
+    VllmConfig,
+    get_current_vllm_config,
+)
+from vllm.transformers_utils.configs import Qwen3NextConfig
+
 logger = init_logger(__name__)
 
 
@@ -121,6 +130,32 @@ class Qwen3_5MoeProcessingInfo(Qwen3VLProcessingInfo):
 
 
 class Qwen3_5GatedDeltaNet(Qwen3NextGatedDeltaNet):
+    def __init__(
+        self,
+        config: Qwen3NextConfig,
+        model_config: ModelConfig | None = None,
+        cache_config: CacheConfig | None = None,
+        quant_config: QuantizationConfig | None = None,
+        speculative_config: SpeculativeConfig | None = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__(
+            config,
+            model_config=model_config,
+            cache_config=cache_config,
+            quant_config=quant_config,
+            speculative_config=speculative_config,
+            prefix=prefix,
+        )
+        self.in_proj_qkvzba = self.create_qkvzba_proj(
+            hidden_size=self.hidden_size,
+            key_dim=self.key_dim,
+            value_dim=self.value_dim,
+            num_v_heads=self.num_v_heads,
+            quant_config=quant_config,
+            prefix=f"{prefix}.in_proj_qkvzba",
+        )
+
     def fix_query_key_value_ordering(
         self,
         mixed_qkvz: torch.Tensor,
@@ -130,35 +165,25 @@ class Qwen3_5GatedDeltaNet(Qwen3NextGatedDeltaNet):
             "Qwen3.5 Series dont need to fix query key value ordering"
         )
 
-    def create_qkvz_proj(
+    def create_qkvzba_proj(
         self,
         hidden_size: int,
         key_dim: int,
         value_dim: int,
-        quant_config: QuantizationConfig | None,
-        prefix: str,
-    ) -> MergedColumnParallelLinear:
-        return MergedColumnParallelLinear(
-            input_size=hidden_size,
-            output_sizes=[key_dim, key_dim, value_dim, value_dim],
-            bias=False,
-            quant_config=quant_config,
-            prefix=prefix,
-        )
-
-    def create_ba_proj(
-        self,
-        hidden_size: int,
         num_v_heads: int,
         quant_config: QuantizationConfig | None,
         prefix: str,
     ) -> MergedColumnParallelLinear:
-        # Qwen3.5 has separate in_proj_b and in_proj_a weights in the
-        # checkpoint, which are loaded into the fused in_proj_ba parameter
-        # via stacked_params_mapping with shard_id 0 and 1 respectively.
         return MergedColumnParallelLinear(
             input_size=hidden_size,
-            output_sizes=[num_v_heads] * 2,
+            output_sizes=[
+                key_dim,
+                key_dim,
+                value_dim,
+                value_dim,
+                num_v_heads,
+                num_v_heads,
+            ],
             bias=False,
             quant_config=quant_config,
             prefix=prefix,
@@ -180,14 +205,16 @@ class Qwen3_5GatedDeltaNet(Qwen3NextGatedDeltaNet):
         # ============================================================
         # Part 1: Input Projection
         # ============================================================
-        mixed_qkvz, _ = self.in_proj_qkvz(hidden_states)
         qkv_size = (self.key_dim * 2 + self.value_dim) // self.tp_size
         z_size = self.value_dim // self.tp_size
-        mixed_qkv, z = mixed_qkvz.split([qkv_size, z_size], dim=-1)
-        z = z.reshape(z.size(0), -1, self.head_v_dim)
-        ba, _ = self.in_proj_ba(hidden_states)
-        b, a = ba.chunk(2, dim=-1)
+        b_size = self.num_v_heads // self.tp_size
+        a_size = self.num_v_heads // self.tp_size
 
+        mixed_qkvzba, _ = self.in_proj_qkvzba(hidden_states)
+        mixed_qkv, z, b, a = mixed_qkvzba.split(
+            [qkv_size, z_size, b_size, a_size], dim=-1
+        )
+        z = z.reshape(z.size(0), -1, self.head_v_dim)
         b = b.contiguous()
         a = a.contiguous()
 
@@ -393,10 +420,10 @@ class Qwen3_5Model(Qwen3NextModel):
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
             # GDN
-            ("in_proj_qkvz", "in_proj_qkv", (0, 1, 2)),
-            ("in_proj_qkvz", "in_proj_z", 3),
-            ("in_proj_ba", "in_proj_b", 0),
-            ("in_proj_ba", "in_proj_a", 1),
+            ("in_proj_qkvzba", "in_proj_qkv", (0, 1, 2)),
+            ("in_proj_qkvzba", "in_proj_z", 3),
+            ("in_proj_qkvzba", "in_proj_b", 4),
+            ("in_proj_qkvzba", "in_proj_a", 5),
         ]
 
         params_dict = dict(self.named_parameters())
@@ -661,8 +688,7 @@ class Qwen3_5ForConditionalGeneration(Qwen3VLForConditionalGeneration, IsHybrid)
     supports_multimodal_pruning = False
 
     packed_modules_mapping = Qwen3VLForConditionalGeneration.packed_modules_mapping | {
-        "in_proj_qkvz": ["in_proj_qkv", "in_proj_z"],
-        "in_proj_ba": ["in_proj_b", "in_proj_a"],
+        "in_proj_qkvzba": ["in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a"],
     }
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "model"):
