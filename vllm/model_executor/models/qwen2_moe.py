@@ -68,6 +68,8 @@ from .utils import (
     maybe_prefix,
 )
 
+from vllm.model_executor.layers.gemm_silu_and_mul import gemm_silu_and_mul
+
 logger = init_logger(__name__)
 
 
@@ -106,8 +108,7 @@ class Qwen2MoeMLP(nn.Module):
         self.expert_gate = expert_gate
 
     def forward(self, x):
-        gate_up, _ = self.gate_up_proj(x)
-        out = self.act_fn(gate_up)
+        out = torch.ops.vllm.gemm_silu_and_mul(x, self.gate_up_proj.weight)
         out, _ = self.down_proj(out)
 
         if self.expert_gate is not None:
