@@ -108,7 +108,11 @@ class Qwen2MoeMLP(nn.Module):
         self.expert_gate = expert_gate
 
     def forward(self, x):
-        out = torch.ops.vllm.gemm_silu_and_mul(x, self.gate_up_proj.weight)
+        if x.shape[0] <= 256:
+            out = torch.ops.vllm.gemm_silu_and_mul(x, self.gate_up_proj.weight)
+        else:
+            gate_up, _ = self.gate_up_proj(x)
+            out = self.act_fn(gate_up)
         out, _ = self.down_proj(out)
 
         if self.expert_gate is not None:
