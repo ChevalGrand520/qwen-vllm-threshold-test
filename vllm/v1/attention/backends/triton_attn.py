@@ -29,6 +29,9 @@ from vllm.v1.attention.backend import (
     MultipleOf,
 )
 from vllm.v1.attention.backends.utils import split_decodes_and_prefills
+from vllm.v1.attention.ops.prefix_prefill import (
+    context_attention_fwd as prefix_prefill_attention_fwd,
+)
 from vllm.v1.attention.ops.triton_prefill_attention import context_attention_fwd
 from vllm.v1.attention.ops.triton_reshape_and_cache_flash import (
     triton_reshape_and_cache_flash,
@@ -47,6 +50,7 @@ NUM_PAR_SOFTMAX_SEGMENTS = 16  # Number of parallel tiled softmax segments
 def _should_use_rocm_prefix_prefill(
     *,
     is_rocm: bool,
+    is_decoder: bool,
     num_prefill_tokens: int,
     has_key_value: bool,
     logits_soft_cap: float,
@@ -55,6 +59,7 @@ def _should_use_rocm_prefix_prefill(
 ) -> bool:
     return (
         is_rocm
+        and is_decoder
         and num_prefill_tokens > 0
         and has_key_value
         and logits_soft_cap == 0
@@ -565,6 +570,82 @@ class TritonAttentionImpl(AttentionImpl):
 
         descale_shape = (cu_seqlens_q.shape[0] - 1, key_cache.shape[2])
         mm_prefix_range_tensor = attn_metadata.mm_prefix_range_tensor
+
+        if _should_use_rocm_prefix_prefill(
+            is_rocm=current_platform.is_rocm(),
+            is_decoder=self.attn_type == AttentionType.DECODER,
+            num_prefill_tokens=attn_metadata.num_prefill_tokens,
+            has_key_value=key is not None and value is not None,
+            logits_soft_cap=self.logits_soft_cap,
+            use_alibi_sqrt=self.use_alibi_sqrt,
+            has_mm_prefix=mm_prefix_range_tensor is not None,
+        ):
+            num_decodes = attn_metadata.num_decodes
+            num_decode_tokens = attn_metadata.num_decode_tokens
+
+            if num_decode_tokens:
+                decode_descale_shape = (num_decodes, key_cache.shape[2])
+                unified_attention(
+                    q=query[:num_decode_tokens],
+                    k=key_cache,
+                    v=value_cache,
+                    out=output[:num_decode_tokens],
+                    cu_seqlens_q=cu_seqlens_q[: num_decodes + 1],
+                    max_seqlen_q=1,
+                    seqused_k=seqused_k[:num_decodes],
+                    max_seqlen_k=max_seqlen_k,
+                    softmax_scale=self.scale,
+                    causal=True,
+                    alibi_slopes=self.alibi_slopes,
+                    use_alibi_sqrt=self.use_alibi_sqrt,
+                    window_size=self.sliding_window,
+                    block_table=block_table[:num_decodes],
+                    softcap=self.logits_soft_cap,
+                    q_descale=None,
+                    k_descale=layer._k_scale.expand(decode_descale_shape),
+                    v_descale=layer._v_scale.expand(decode_descale_shape),
+                    seq_threshold_3D=seq_threshold_3D,
+                    num_par_softmax_segments=num_par_softmax_segments,
+                    softmax_segm_output=softmax_segm_output,
+                    softmax_segm_max=softmax_segm_max,
+                    softmax_segm_expsum=softmax_segm_expsum,
+                    sinks=self.sinks,
+                    output_scale=output_scale,
+                    mm_prefix_range=None,
+                )
+
+            prefix_key_cache, prefix_value_cache = _view_rocm_prefix_kv_cache(
+                key_cache,
+                value_cache,
+                num_kv_heads=self.num_kv_heads,
+                head_size=self.head_size,
+            )
+            prefill_start = num_decode_tokens
+            prefill_query_start_loc = attn_metadata.prefill_query_start_loc
+            assert prefill_query_start_loc is not None
+            prefix_prefill_attention_fwd(
+                q=query[prefill_start:num_actual_tokens],
+                k=key[prefill_start:num_actual_tokens],
+                v=value[prefill_start:num_actual_tokens],
+                o=output[prefill_start:num_actual_tokens],
+                kv_cache_dtype=self.kv_cache_dtype,
+                k_cache=prefix_key_cache,
+                v_cache=prefix_value_cache,
+                b_loc=block_table[num_decodes:],
+                b_start_loc=prefill_query_start_loc,
+                b_seq_len=seqused_k[num_decodes:],
+                max_seq_len=max_seqlen_k,
+                max_input_len=max_seqlen_q,
+                k_scale=layer._k_scale,
+                v_scale=layer._v_scale,
+                alibi_slopes=self.alibi_slopes,
+                sliding_window=self.sliding_window[0],
+                sm_scale=self.scale,
+                skip_decode=False,
+                fp8_out_scale=output_scale,
+                sinks=self.sinks,
+            )
+            return output
 
         unified_attention(
             q=query[:num_actual_tokens],

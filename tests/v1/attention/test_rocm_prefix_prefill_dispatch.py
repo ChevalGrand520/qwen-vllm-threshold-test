@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
+from vllm.v1.attention.backends import triton_attn
 from vllm.v1.attention.backends.triton_attn import (
+    TritonAttentionImpl,
     _shift_prefill_query_start_loc,
     _should_use_rocm_prefix_prefill,
     _view_rocm_prefix_kv_cache,
@@ -16,6 +20,7 @@ from vllm.v1.attention.backends.triton_attn import (
     [
         ({}, True),
         ({"is_rocm": False}, False),
+        ({"is_decoder": False}, False),
         ({"num_prefill_tokens": 0}, False),
         ({"has_key_value": False}, False),
         ({"logits_soft_cap": 1.0}, False),
@@ -26,6 +31,7 @@ from vllm.v1.attention.backends.triton_attn import (
 def test_should_use_rocm_prefix_prefill(overrides, expected):
     args = {
         "is_rocm": True,
+        "is_decoder": True,
         "num_prefill_tokens": 4096,
         "has_key_value": True,
         "logits_soft_cap": 0.0,
@@ -76,3 +82,96 @@ def test_shift_prefill_query_start_loc_rebases_trailing_requests():
         prefill_query_start_loc,
         torch.tensor([0, 4, 8], dtype=torch.int32),
     )
+
+
+def test_mixed_batch_routes_decode_and_prefill_to_disjoint_kernels(monkeypatch):
+    calls = {}
+
+    def record_unified_attention(**kwargs):
+        calls["decode"] = kwargs
+        kwargs["out"].fill_(1)
+
+    def record_prefix_prefill(**kwargs):
+        calls["prefill"] = kwargs
+        kwargs["o"].fill_(2)
+
+    monkeypatch.setattr(
+        triton_attn,
+        "current_platform",
+        SimpleNamespace(is_rocm=lambda: True),
+    )
+    monkeypatch.setattr(triton_attn, "unified_attention", record_unified_attention)
+    monkeypatch.setattr(
+        triton_attn,
+        "prefix_prefill_attention_fwd",
+        record_prefix_prefill,
+    )
+
+    impl = object.__new__(TritonAttentionImpl)
+    impl.attn_type = "decoder"
+    impl.kv_cache_dtype = "auto"
+    impl.fp8_dtype = torch.float8_e4m3fn
+    impl.num_kv_heads = 2
+    impl.head_size = 64
+    impl.logits_soft_cap = 0.0
+    impl.use_alibi_sqrt = False
+    impl.scale = 0.125
+    impl.alibi_slopes = None
+    impl.sliding_window = (-1, -1)
+    impl.sinks = None
+
+    query = torch.zeros((6, 4, 64), dtype=torch.bfloat16)
+    key = torch.zeros((6, 2, 64), dtype=torch.bfloat16)
+    value = torch.zeros_like(key)
+    output = torch.zeros_like(query)
+    kv_cache = torch.zeros((2, 2, 16, 2, 64), dtype=torch.bfloat16)
+    query_start_loc = torch.tensor([0, 1, 2, 6], dtype=torch.int32)
+    seq_lens = torch.tensor([10, 20, 6], dtype=torch.int32)
+    block_table = torch.arange(12, dtype=torch.int32).reshape(3, 4)
+    metadata = SimpleNamespace(
+        num_actual_tokens=6,
+        max_query_len=4,
+        query_start_loc=query_start_loc,
+        max_seq_len=20,
+        seq_lens=seq_lens,
+        block_table=block_table,
+        use_cascade=False,
+        num_decodes=2,
+        num_prefills=1,
+        num_decode_tokens=2,
+        num_prefill_tokens=4,
+        prefill_query_start_loc=torch.tensor([0, 4], dtype=torch.int32),
+        seq_threshold_3D=16,
+        num_par_softmax_segments=4,
+        softmax_segm_output=torch.empty(0),
+        softmax_segm_max=torch.empty(0),
+        softmax_segm_expsum=torch.empty(0),
+        mm_prefix_range_tensor=None,
+    )
+    layer = SimpleNamespace(
+        _k_scale=torch.tensor(1.0),
+        _v_scale=torch.tensor(1.0),
+        _q_scale_float=1.0,
+    )
+
+    result = impl.forward(
+        layer,
+        query,
+        key,
+        value,
+        kv_cache,
+        metadata,
+        output=output,
+    )
+
+    assert result is output
+    assert calls["decode"]["q"].shape[0] == 2
+    assert calls["decode"]["max_seqlen_q"] == 1
+    assert torch.equal(calls["decode"]["seqused_k"], seq_lens[:2])
+    assert calls["prefill"]["q"].shape[0] == 4
+    assert torch.equal(
+        calls["prefill"]["b_start_loc"], metadata.prefill_query_start_loc
+    )
+    assert torch.equal(calls["prefill"]["b_seq_len"], seq_lens[2:])
+    assert torch.equal(output[:2], torch.ones_like(output[:2]))
+    assert torch.equal(output[2:], torch.full_like(output[2:], 2))
