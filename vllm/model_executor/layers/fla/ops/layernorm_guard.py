@@ -298,7 +298,6 @@ def _layer_norm_fn_impl(
     return y.reshape(x_shape_og)
 
 
-@input_guard
 def layernorm_fn(
     x,
     weight,
@@ -315,7 +314,6 @@ def layernorm_fn(
     )
 
 
-@input_guard
 def rmsnorm_fn(
     x,
     weight,

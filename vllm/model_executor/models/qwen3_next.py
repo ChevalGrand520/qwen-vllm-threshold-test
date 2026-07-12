@@ -441,26 +441,6 @@ class Qwen3NextGatedDeltaNet(nn.Module, MambaBase):
         )
         self.conv1d.weight.data = self.conv1d.weight.data.unsqueeze(1)
 
-        # projection of the input hidden states
-        # Qwen3-Next and Qwen3.5 has a different qkv_proj layout,
-        # we need to create qkvz_proj adaptively here.
-        self.in_proj_qkvz = self.create_qkvz_proj(
-            hidden_size=self.hidden_size,
-            key_dim=self.key_dim,
-            value_dim=self.value_dim,
-            quant_config=quant_config,
-            prefix=f"{prefix}.in_proj_qkvz",
-        )
-        # ba_proj doesn't support blockwise fp8 quantization.
-        # Qwen3-Next and Qwen3.5 have different in_proj_ba checkpoint
-        # layouts, so we use a factory method to create the projection.
-        self.in_proj_ba = self.create_ba_proj(
-            hidden_size=self.hidden_size,
-            num_v_heads=self.num_v_heads,
-            quant_config=quant_config,
-            prefix=f"{prefix}.in_proj_ba",
-        )
-
         query_key_settings = (self.key_dim, 0, False)
         value_settings = (self.value_dim, 0, False)
 
@@ -522,44 +502,6 @@ class Qwen3NextGatedDeltaNet(nn.Module, MambaBase):
         if prefix in compilation_config.static_forward_context:
             raise ValueError(f"Duplicate layer name: {prefix}")
         compilation_config.static_forward_context[prefix] = self
-
-    def create_qkvz_proj(
-        self,
-        hidden_size: int,
-        key_dim: int,
-        value_dim: int,
-        quant_config: QuantizationConfig | None,
-        prefix: str,
-    ) -> MergedColumnParallelLinear:
-        return MergedColumnParallelLinear(
-            input_size=hidden_size,
-            output_sizes=[sum((key_dim, key_dim, value_dim, value_dim))],
-            bias=False,
-            quant_config=quant_config,
-            prefix=prefix,
-        )
-
-    def create_ba_proj(
-        self,
-        hidden_size: int,
-        num_v_heads: int,
-        quant_config: QuantizationConfig | None,
-        prefix: str,
-    ) -> MergedColumnParallelLinear:
-        # Qwen3-Next stores in_proj_ba as a single fused weight with an
-        # interleaved GQA layout: [b_g0, a_g0, b_g1, a_g1, ...] where
-        # each group corresponds to a key-head group. We must use a single
-        # output shard so that ColumnParallel sharding preserves this
-        # interleaved structure across TP ranks.
-        # Qwen3.5 overrides this to use [num_v_heads, num_v_heads] since
-        # its checkpoint has separate in_proj_b and in_proj_a weights.
-        return MergedColumnParallelLinear(
-            input_size=hidden_size,
-            output_sizes=[num_v_heads * 2],
-            bias=False,
-            quant_config=quant_config,
-            prefix=prefix,
-        )
 
     def fix_query_key_value_ordering(
         self,
@@ -1561,8 +1503,6 @@ class Qwen3NextForCausalLM(
             "v_proj",
         ],
         "gate_up_proj": ["gate_proj", "up_proj"],
-        "in_proj_qkvz": ["in_proj_qkvz"],
-        "in_proj_ba": ["in_proj_ba"],
     }
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):

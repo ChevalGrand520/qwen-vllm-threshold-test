@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from vllm.v1.worker.gpu_model_runner import GPUModelRunner
     from vllm.v1.worker.gpu_worker import Worker
 
+from vllm.model_executor.layers.gemm_silu_and_mul import warmup_gemm_silu_and_mul
+
 logger = init_logger(__name__)
 
 
@@ -76,6 +78,8 @@ def kernel_warmup(worker: "Worker"):
             force_attention=True,
             create_mixed_batch=True,
         )
+
+    warmup_gemm_silu_and_mul(17408, 5120, torch.bfloat16, torch.bfloat16)
 
 
 def flashinfer_autotune(runner: "GPUModelRunner") -> None:
