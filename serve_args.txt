@@ -1,1 +1,2 @@
 -cc={"custom_ops":["none","+rms_norm_gated"]}
+--attention-config={"use_prefill_decode_attention":true}
