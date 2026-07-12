@@ -43,6 +43,44 @@ MIN_LAUNCH_GRID_SIZE_2D = 128  # Minimum launch grid size of 2D kernel
 NUM_PAR_SOFTMAX_SEGMENTS = 16  # Number of parallel tiled softmax segments
 
 
+def _should_use_rocm_prefix_prefill(
+    *,
+    is_rocm: bool,
+    num_prefill_tokens: int,
+    has_key_value: bool,
+    logits_soft_cap: float,
+    use_alibi_sqrt: bool,
+    has_mm_prefix: bool,
+) -> bool:
+    return (
+        is_rocm
+        and num_prefill_tokens > 0
+        and has_key_value
+        and logits_soft_cap == 0
+        and not use_alibi_sqrt
+        and not has_mm_prefix
+    )
+
+
+def _view_rocm_prefix_kv_cache(
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    *,
+    num_kv_heads: int,
+    head_size: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    x = 16 // key_cache.element_size()
+    if head_size % x != 0:
+        raise ValueError(f"head_size={head_size} must be divisible by x={x}")
+
+    num_blocks, block_size = key_cache.shape[:2]
+    key_view = key_cache.view(
+        num_blocks, block_size, num_kv_heads, head_size // x, x
+    ).permute(0, 2, 3, 1, 4)
+    value_view = value_cache.permute(0, 2, 3, 1)
+    return key_view, value_view
+
+
 @dataclass
 class TritonAttentionMetadata:
     # NOTE(sang): Definition of context_len, query_len, and seq_len.
