@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from vllm.v1.attention.backends.triton_attn import (
+    _shift_prefill_query_start_loc,
     _should_use_rocm_prefix_prefill,
     _view_rocm_prefix_kv_cache,
 )
@@ -60,3 +61,18 @@ def test_view_rocm_prefix_kv_cache_rejects_incompatible_head_size():
         _view_rocm_prefix_kv_cache(
             key, value, num_kv_heads=2, head_size=66
         )
+
+
+def test_shift_prefill_query_start_loc_rebases_trailing_requests():
+    query_start_loc = torch.tensor([0, 1, 2, 6, 10], dtype=torch.int32)
+
+    prefill_query_start_loc = _shift_prefill_query_start_loc(
+        query_start_loc,
+        num_decodes=2,
+        num_decode_tokens=2,
+    )
+
+    assert torch.equal(
+        prefill_query_start_loc,
+        torch.tensor([0, 4, 8], dtype=torch.int32),
+    )

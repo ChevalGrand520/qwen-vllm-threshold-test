@@ -28,6 +28,7 @@ from vllm.v1.attention.backend import (
     CommonAttentionMetadata,
     MultipleOf,
 )
+from vllm.v1.attention.backends.utils import split_decodes_and_prefills
 from vllm.v1.attention.ops.triton_prefill_attention import context_attention_fwd
 from vllm.v1.attention.ops.triton_reshape_and_cache_flash import (
     triton_reshape_and_cache_flash,
@@ -81,6 +82,15 @@ def _view_rocm_prefix_kv_cache(
     return key_view, value_view
 
 
+def _shift_prefill_query_start_loc(
+    query_start_loc: torch.Tensor,
+    *,
+    num_decodes: int,
+    num_decode_tokens: int,
+) -> torch.Tensor:
+    return query_start_loc[num_decodes:] - num_decode_tokens
+
+
 @dataclass
 class TritonAttentionMetadata:
     # NOTE(sang): Definition of context_len, query_len, and seq_len.
@@ -98,6 +108,11 @@ class TritonAttentionMetadata:
     seq_lens: torch.Tensor
     block_table: torch.Tensor
     slot_mapping: torch.Tensor
+    num_decodes: int
+    num_prefills: int
+    num_decode_tokens: int
+    num_prefill_tokens: int
+    prefill_query_start_loc: torch.Tensor | None
 
     seq_threshold_3D: int
     num_par_softmax_segments: int
@@ -163,6 +178,7 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
         device: torch.device,
     ):
         super().__init__(kv_cache_spec, layer_names, vllm_config, device)
+        self._init_reorder_batch_threshold(1, supports_spec_as_decode=False)
 
         self.block_size = kv_cache_spec.block_size
 
@@ -251,6 +267,18 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
         seq_lens = common_attn_metadata.seq_lens
         block_table_tensor = common_attn_metadata.block_table_tensor
         slot_mapping = common_attn_metadata.slot_mapping
+        num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = (
+            split_decodes_and_prefills(common_attn_metadata, decode_threshold=1)
+        )
+        prefill_query_start_loc = (
+            _shift_prefill_query_start_loc(
+                query_start_loc,
+                num_decodes=num_decodes,
+                num_decode_tokens=num_decode_tokens,
+            )
+            if num_prefills
+            else None
+        )
 
         use_cascade = common_prefix_len > 0
 
@@ -277,6 +305,11 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
             seq_lens=seq_lens,
             block_table=block_table_tensor,
             slot_mapping=slot_mapping,
+            num_decodes=num_decodes,
+            num_prefills=num_prefills,
+            num_decode_tokens=num_decode_tokens,
+            num_prefill_tokens=num_prefill_tokens,
+            prefill_query_start_loc=prefill_query_start_loc,
             use_cascade=use_cascade,
             common_prefix_len=common_prefix_len,
             cu_prefix_query_lens=cu_prefix_query_lens,
