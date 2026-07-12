@@ -2,10 +2,13 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 import torch
 
+from vllm.config.compilation import CUDAGraphMode
+from vllm.platforms.rocm import RocmPlatform
 from vllm.v1.attention.backends import triton_attn
 from vllm.v1.attention.backends.triton_attn import (
     TritonAttentionImpl,
@@ -13,6 +16,24 @@ from vllm.v1.attention.backends.triton_attn import (
     _should_use_rocm_prefix_prefill,
     _view_rocm_prefix_kv_cache,
 )
+
+
+def test_qwen35_rocm_prefix_prefill_disables_cudagraph_capture():
+    config = MagicMock()
+    config.model_config.hf_config.architectures = [
+        "Qwen3_5ForConditionalGeneration"
+    ]
+    config.compilation_config.cudagraph_mode = CUDAGraphMode.FULL_AND_PIECEWISE
+    config.cache_config = None
+    config.parallel_config.decode_context_parallel_size = 1
+    config.parallel_config.prefill_context_parallel_size = 1
+    config.parallel_config.worker_cls = "vllm.v1.worker.gpu_worker.Worker"
+
+    RocmPlatform.check_and_update_config(config)
+
+    assert config.compilation_config.cudagraph_mode == CUDAGraphMode.NONE
+    assert config.compilation_config.max_cudagraph_capture_size == 0
+    assert config.compilation_config.cudagraph_capture_sizes == []
 
 
 @pytest.mark.parametrize(
