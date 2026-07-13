@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # SPDX-FileCopyrightText: Tri Dao
+# Contest-specific changes were developed with OpenAI Codex assistance and team review.
 #
 # This file contains code copied from the flash-linear-attention project.
 # The original source code was licensed under the MIT license and included

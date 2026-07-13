@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# Contest-specific tests were developed with OpenAI Codex assistance and team review.
 
+from itertools import accumulate
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -12,8 +14,9 @@ from vllm.platforms.rocm import RocmPlatform
 from vllm.v1.attention.backends import triton_attn
 from vllm.v1.attention.backends.triton_attn import (
     TritonAttentionImpl,
+    TritonAttentionMetadataBuilder,
+    _is_pure_prefill_batch,
     _select_seq_threshold_3d,
-    _shift_prefill_query_start_loc,
     _should_use_rocm_prefix_prefill,
     _view_rocm_prefix_kv_cache,
 )
@@ -26,9 +29,7 @@ def test_single_decode_capture_preserves_natural_3d_threshold():
 
 def test_qwen35_rocm_prefix_prefill_uses_piecewise_prefill_graphs():
     config = MagicMock()
-    config.model_config.hf_config.architectures = [
-        "Qwen3_5ForConditionalGeneration"
-    ]
+    config.model_config.hf_config.architectures = ["Qwen3_5ForConditionalGeneration"]
     config.compilation_config.cudagraph_mode = CUDAGraphMode.FULL_AND_PIECEWISE
     config.cache_config = None
     config.parallel_config.decode_context_parallel_size = 1
@@ -37,10 +38,7 @@ def test_qwen35_rocm_prefix_prefill_uses_piecewise_prefill_graphs():
 
     RocmPlatform.check_and_update_config(config)
 
-    assert (
-        config.compilation_config.cudagraph_mode
-        == CUDAGraphMode.FULL_AND_PIECEWISE
-    )
+    assert config.compilation_config.cudagraph_mode == CUDAGraphMode.FULL_AND_PIECEWISE
     assert config.compilation_config.max_cudagraph_capture_size == 1
     assert config.compilation_config.cudagraph_capture_sizes == [1]
 
@@ -51,7 +49,7 @@ def test_qwen35_rocm_prefix_prefill_uses_piecewise_prefill_graphs():
         ({}, True),
         ({"is_rocm": False}, False),
         ({"is_decoder": False}, False),
-        ({"num_prefill_tokens": 0}, False),
+        ({"is_pure_prefill": False}, False),
         ({"has_key_value": False}, False),
         ({"logits_soft_cap": 1.0}, False),
         ({"use_alibi_sqrt": True}, False),
@@ -62,7 +60,7 @@ def test_should_use_rocm_prefix_prefill(overrides, expected):
     args = {
         "is_rocm": True,
         "is_decoder": True,
-        "num_prefill_tokens": 4096,
+        "is_pure_prefill": True,
         "has_key_value": True,
         "logits_soft_cap": 0.0,
         "use_alibi_sqrt": False,
@@ -94,31 +92,46 @@ def test_view_rocm_prefix_kv_cache_rejects_incompatible_head_size():
     value = torch.empty_like(key)
 
     with pytest.raises(ValueError, match="must be divisible"):
-        _view_rocm_prefix_kv_cache(
-            key, value, num_kv_heads=2, head_size=66
-        )
+        _view_rocm_prefix_kv_cache(key, value, num_kv_heads=2, head_size=66)
 
 
-def test_shift_prefill_query_start_loc_rebases_trailing_requests():
-    query_start_loc = torch.tensor([0, 1, 2, 6, 10], dtype=torch.int32)
+@pytest.mark.parametrize(
+    ("query_start_loc", "expected"),
+    [
+        ([0, 4, 8], True),
+        ([0, 1, 5], False),
+        ([0, 1, 2], False),
+        ([0], False),
+    ],
+)
+def test_is_pure_prefill_batch(query_start_loc, expected):
+    starts = torch.tensor(query_start_loc, dtype=torch.int32)
 
-    prefill_query_start_loc = _shift_prefill_query_start_loc(
-        query_start_loc,
-        num_decodes=2,
-        num_decode_tokens=2,
+    assert _is_pure_prefill_batch(starts) is expected
+
+
+def test_metadata_builder_does_not_enable_batch_reordering():
+    config = MagicMock()
+    config.model_config.get_num_attention_heads.return_value = 4
+    config.model_config.get_num_kv_heads.return_value = 2
+    config.model_config.get_head_size.return_value = 64
+    config.compilation_config.cudagraph_mode = CUDAGraphMode.NONE
+
+    builder = TritonAttentionMetadataBuilder(
+        SimpleNamespace(block_size=16),
+        ["model.layers.0.self_attn"],
+        config,
+        torch.device("cpu"),
     )
 
-    assert torch.equal(
-        prefill_query_start_loc,
-        torch.tensor([0, 4, 8], dtype=torch.int32),
-    )
+    assert builder.reorder_batch_threshold is None
 
 
-def test_mixed_batch_routes_decode_and_prefill_to_disjoint_kernels(monkeypatch):
+def _run_dispatch_case(monkeypatch, query_lens, *, is_pure_prefill):
     calls = {}
 
     def record_unified_attention(**kwargs):
-        calls["decode"] = kwargs
+        calls["unified"] = kwargs
         kwargs["out"].fill_(1)
 
     def record_prefix_prefill(**kwargs):
@@ -150,27 +163,28 @@ def test_mixed_batch_routes_decode_and_prefill_to_disjoint_kernels(monkeypatch):
     impl.sliding_window = (-1, -1)
     impl.sinks = None
 
-    query = torch.zeros((6, 4, 64), dtype=torch.bfloat16)
-    key = torch.zeros((6, 2, 64), dtype=torch.bfloat16)
+    num_tokens = sum(query_lens)
+    num_reqs = len(query_lens)
+    query = torch.zeros((num_tokens, 4, 64), dtype=torch.bfloat16)
+    key = torch.zeros((num_tokens, 2, 64), dtype=torch.bfloat16)
     value = torch.zeros_like(key)
     output = torch.zeros_like(query)
     kv_cache = torch.zeros((2, 2, 16, 2, 64), dtype=torch.bfloat16)
-    query_start_loc = torch.tensor([0, 1, 2, 6], dtype=torch.int32)
-    seq_lens = torch.tensor([10, 20, 6], dtype=torch.int32)
-    block_table = torch.arange(12, dtype=torch.int32).reshape(3, 4)
+    query_start_loc = torch.tensor([0, *accumulate(query_lens)], dtype=torch.int32)
+    seq_lens = torch.tensor(
+        [length if length > 1 else 16 for length in query_lens],
+        dtype=torch.int32,
+    )
+    block_table = torch.arange(num_reqs * 4, dtype=torch.int32).reshape(num_reqs, 4)
     metadata = SimpleNamespace(
-        num_actual_tokens=6,
-        max_query_len=4,
+        num_actual_tokens=num_tokens,
+        max_query_len=max(query_lens),
         query_start_loc=query_start_loc,
-        max_seq_len=20,
+        max_seq_len=int(seq_lens.max()),
         seq_lens=seq_lens,
         block_table=block_table,
         use_cascade=False,
-        num_decodes=2,
-        num_prefills=1,
-        num_decode_tokens=2,
-        num_prefill_tokens=4,
-        prefill_query_start_loc=torch.tensor([0, 4], dtype=torch.int32),
+        is_pure_prefill=is_pure_prefill,
         seq_threshold_3D=16,
         num_par_softmax_segments=4,
         softmax_segm_output=torch.empty(0),
@@ -194,14 +208,29 @@ def test_mixed_batch_routes_decode_and_prefill_to_disjoint_kernels(monkeypatch):
         output=output,
     )
 
-    assert result is output
-    assert calls["decode"]["q"].shape[0] == 2
-    assert calls["decode"]["max_seqlen_q"] == 1
-    assert torch.equal(calls["decode"]["seqused_k"], seq_lens[:2])
-    assert calls["prefill"]["q"].shape[0] == 4
-    assert torch.equal(
-        calls["prefill"]["b_start_loc"], metadata.prefill_query_start_loc
+    return calls, result, output, metadata
+
+
+def test_pure_prefill_routes_to_rocm_prefix_kernel(monkeypatch):
+    calls, result, output, metadata = _run_dispatch_case(
+        monkeypatch, [4, 4], is_pure_prefill=True
     )
-    assert torch.equal(calls["prefill"]["b_seq_len"], seq_lens[2:])
-    assert torch.equal(output[:2], torch.ones_like(output[:2]))
-    assert torch.equal(output[2:], torch.full_like(output[2:], 2))
+
+    assert result is output
+    assert "unified" not in calls
+    assert calls["prefill"]["q"].shape[0] == 8
+    assert torch.equal(calls["prefill"]["b_start_loc"], metadata.query_start_loc)
+    assert torch.equal(calls["prefill"]["b_seq_len"], metadata.seq_lens)
+    assert torch.equal(output, torch.full_like(output, 2))
+
+
+@pytest.mark.parametrize("query_lens", [[1, 1], [1, 4]])
+def test_decode_and_mixed_batches_use_original_triton_path(monkeypatch, query_lens):
+    calls, result, output, _ = _run_dispatch_case(
+        monkeypatch, query_lens, is_pure_prefill=False
+    )
+
+    assert result is output
+    assert "prefill" not in calls
+    assert calls["unified"]["q"].shape[0] == sum(query_lens)
+    assert torch.equal(output, torch.ones_like(output))

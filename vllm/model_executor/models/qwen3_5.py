@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# Contest-specific changes were developed with OpenAI Codex assistance and team review.
 
 # Copyright 2025 The vLLM team.
 # Copyright 2025 The Qwen Team.

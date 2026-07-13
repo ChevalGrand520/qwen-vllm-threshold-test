@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# Contest-specific changes were developed with OpenAI Codex assistance and team review.
 """High-Performance Triton-only Attention layer."""
 
 from dataclasses import dataclass
@@ -28,7 +29,6 @@ from vllm.v1.attention.backend import (
     CommonAttentionMetadata,
     MultipleOf,
 )
-from vllm.v1.attention.backends.utils import split_decodes_and_prefills
 from vllm.v1.attention.ops.prefix_prefill import (
     context_attention_fwd as prefix_prefill_attention_fwd,
 )
@@ -62,7 +62,7 @@ def _should_use_rocm_prefix_prefill(
     *,
     is_rocm: bool,
     is_decoder: bool,
-    num_prefill_tokens: int,
+    is_pure_prefill: bool,
     has_key_value: bool,
     logits_soft_cap: float,
     use_alibi_sqrt: bool,
@@ -71,12 +71,19 @@ def _should_use_rocm_prefix_prefill(
     return (
         is_rocm
         and is_decoder
-        and num_prefill_tokens > 0
+        and is_pure_prefill
         and has_key_value
         and logits_soft_cap == 0
         and not use_alibi_sqrt
         and not has_mm_prefix
     )
+
+
+def _is_pure_prefill_batch(query_start_loc_cpu: torch.Tensor) -> bool:
+    if query_start_loc_cpu.numel() <= 1:
+        return False
+    query_lens = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
+    return bool(torch.all(query_lens > 1).item())
 
 
 def _view_rocm_prefix_kv_cache(
@@ -98,15 +105,6 @@ def _view_rocm_prefix_kv_cache(
     return key_view, value_view
 
 
-def _shift_prefill_query_start_loc(
-    query_start_loc: torch.Tensor,
-    *,
-    num_decodes: int,
-    num_decode_tokens: int,
-) -> torch.Tensor:
-    return query_start_loc[num_decodes:] - num_decode_tokens
-
-
 @dataclass
 class TritonAttentionMetadata:
     # NOTE(sang): Definition of context_len, query_len, and seq_len.
@@ -124,11 +122,7 @@ class TritonAttentionMetadata:
     seq_lens: torch.Tensor
     block_table: torch.Tensor
     slot_mapping: torch.Tensor
-    num_decodes: int
-    num_prefills: int
-    num_decode_tokens: int
-    num_prefill_tokens: int
-    prefill_query_start_loc: torch.Tensor | None
+    is_pure_prefill: bool
 
     seq_threshold_3D: int
     num_par_softmax_segments: int
@@ -194,7 +188,6 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
         device: torch.device,
     ):
         super().__init__(kv_cache_spec, layer_names, vllm_config, device)
-        self._init_reorder_batch_threshold(1, supports_spec_as_decode=False)
 
         self.block_size = kv_cache_spec.block_size
 
@@ -283,17 +276,8 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
         seq_lens = common_attn_metadata.seq_lens
         block_table_tensor = common_attn_metadata.block_table_tensor
         slot_mapping = common_attn_metadata.slot_mapping
-        num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = (
-            split_decodes_and_prefills(common_attn_metadata, decode_threshold=1)
-        )
-        prefill_query_start_loc = (
-            _shift_prefill_query_start_loc(
-                query_start_loc,
-                num_decodes=num_decodes,
-                num_decode_tokens=num_decode_tokens,
-            )
-            if num_prefills
-            else None
+        is_pure_prefill = _is_pure_prefill_batch(
+            common_attn_metadata.query_start_loc_cpu
         )
 
         use_cascade = common_prefix_len > 0
@@ -321,11 +305,7 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
             seq_lens=seq_lens,
             block_table=block_table_tensor,
             slot_mapping=slot_mapping,
-            num_decodes=num_decodes,
-            num_prefills=num_prefills,
-            num_decode_tokens=num_decode_tokens,
-            num_prefill_tokens=num_prefill_tokens,
-            prefill_query_start_loc=prefill_query_start_loc,
+            is_pure_prefill=is_pure_prefill,
             use_cascade=use_cascade,
             common_prefix_len=common_prefix_len,
             cu_prefix_query_lens=cu_prefix_query_lens,
@@ -585,66 +565,29 @@ class TritonAttentionImpl(AttentionImpl):
         if _should_use_rocm_prefix_prefill(
             is_rocm=current_platform.is_rocm(),
             is_decoder=self.attn_type == AttentionType.DECODER,
-            num_prefill_tokens=attn_metadata.num_prefill_tokens,
+            is_pure_prefill=attn_metadata.is_pure_prefill,
             has_key_value=key is not None and value is not None,
             logits_soft_cap=self.logits_soft_cap,
             use_alibi_sqrt=self.use_alibi_sqrt,
             has_mm_prefix=mm_prefix_range_tensor is not None,
         ):
-            num_decodes = attn_metadata.num_decodes
-            num_decode_tokens = attn_metadata.num_decode_tokens
-
-            if num_decode_tokens:
-                decode_descale_shape = (num_decodes, key_cache.shape[2])
-                unified_attention(
-                    q=query[:num_decode_tokens],
-                    k=key_cache,
-                    v=value_cache,
-                    out=output[:num_decode_tokens],
-                    cu_seqlens_q=cu_seqlens_q[: num_decodes + 1],
-                    max_seqlen_q=1,
-                    seqused_k=seqused_k[:num_decodes],
-                    max_seqlen_k=max_seqlen_k,
-                    softmax_scale=self.scale,
-                    causal=True,
-                    alibi_slopes=self.alibi_slopes,
-                    use_alibi_sqrt=self.use_alibi_sqrt,
-                    window_size=self.sliding_window,
-                    block_table=block_table[:num_decodes],
-                    softcap=self.logits_soft_cap,
-                    q_descale=None,
-                    k_descale=layer._k_scale.expand(decode_descale_shape),
-                    v_descale=layer._v_scale.expand(decode_descale_shape),
-                    seq_threshold_3D=seq_threshold_3D,
-                    num_par_softmax_segments=num_par_softmax_segments,
-                    softmax_segm_output=softmax_segm_output,
-                    softmax_segm_max=softmax_segm_max,
-                    softmax_segm_expsum=softmax_segm_expsum,
-                    sinks=self.sinks,
-                    output_scale=output_scale,
-                    mm_prefix_range=None,
-                )
-
             prefix_key_cache, prefix_value_cache = _view_rocm_prefix_kv_cache(
                 key_cache,
                 value_cache,
                 num_kv_heads=self.num_kv_heads,
                 head_size=self.head_size,
             )
-            prefill_start = num_decode_tokens
-            prefill_query_start_loc = attn_metadata.prefill_query_start_loc
-            assert prefill_query_start_loc is not None
             prefix_prefill_attention_fwd(
-                q=query[prefill_start:num_actual_tokens],
-                k=key[prefill_start:num_actual_tokens],
-                v=value[prefill_start:num_actual_tokens],
-                o=output[prefill_start:num_actual_tokens],
+                q=query[:num_actual_tokens],
+                k=key[:num_actual_tokens],
+                v=value[:num_actual_tokens],
+                o=output[:num_actual_tokens],
                 kv_cache_dtype=self.kv_cache_dtype,
                 k_cache=prefix_key_cache,
                 v_cache=prefix_value_cache,
-                b_loc=block_table[num_decodes:],
-                b_start_loc=prefill_query_start_loc,
-                b_seq_len=seqused_k[num_decodes:],
+                b_loc=block_table,
+                b_start_loc=cu_seqlens_q,
+                b_seq_len=seqused_k,
                 max_seq_len=max_seqlen_k,
                 max_input_len=max_seqlen_q,
                 k_scale=layer._k_scale,

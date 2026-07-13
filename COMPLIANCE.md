@@ -7,7 +7,7 @@
 | 检查项 | 结果 | 说明 |
 |---|---|---|
 | 模型权重和 tokenizer | 通过 | 未修改权重、权重加载格式、tokenizer 或 chat template |
-| 模型有效计算结构 | 通过 | 仅合并等价投影与 MLP 算子；未减少层、头、通道或 token |
+| 模型有效计算结构 | 通过 | 仅合并等价投影与 MLP 算子，并优化 Attention 内核；未减少层、头、通道或 token |
 | 投机解码 | 通过 | 未启用 MTP、ngram、draft model 或其他预测器 |
 | 调度与锁定参数 | 通过 | 未修改 scheduler、上下文长度、批处理上限或采样参数 |
 | 数据与评测流程 | 通过 | 未修改数据集、评测脚本、接口、统计代码或结果解析 |
@@ -16,12 +16,17 @@
 | 自定义环境变量 | 通过 | 未新增环境变量，详见 `ENVIRONMENT_VARIABLES.md` |
 | 优化说明 | 通过 | 全部增量文件和官方结果已记录在 `OPTIMIZATION.md` |
 | 许可证 | 通过 | 沿用 vLLM Apache-2.0；新增内核包含 SPDX 标识 |
+| 生成式 AI 披露 | 通过 | 代码注释和本文档均明确披露 OpenAI Codex 辅助；答辩时仍需主动说明 |
 
 ## 规则边界说明
 
 GDN 六路投影和 GEMM-SiLU 的变化属于等价算子融合。融合前后的权重、输出
 尺寸、张量拆分顺序和后续数学计算保持一致。该改动减少算子启动和中间张量
 访存，不属于剪枝、跳层、early-exit 或模型语义变更。
+
+ROCm Prefix Prefill 路径只在纯 Prefill 批次中替换 Attention 内核；Decode 和
+混合批次仍走原始 Triton Unified Attention。该路径没有修改 batch scheduler，
+也没有调整 `max-model-len`、`max-num-seqs`、`max-num-batched-tokens` 等锁定参数。
 
 `qwen3_5.py` 和 `qwen3_next.py` 中仍可看到 vLLM 上游对 speculative config、
 MTP 权重和 scheduler config 的通用兼容代码。这些代码在队伍增量之前已经
@@ -30,11 +35,19 @@ MTP 权重和 scheduler config 的通用兼容代码。这些代码在队伍增�
 ## 已执行检查
 
 - `git diff --check`
-- 六个变更 Python 文件的 `compile()` 语法检查
+- 增量 Python 文件的 `py_compile` 语法检查
+- 增量 Attention 文件的 `ruff check` 与 `ruff format --check`
 - 相对基线的禁用行为关键词扫描
-- 发布内核与 68.0961 官方验证版本的 AST 等价检查
+- Attention 分流和调度边界的 AST 定向检查
 - 发布历史、路径和增量文件中的工具命名扫描
 
-本机未安装 `ruff`，因此未执行完整仓库 lint。设备端编译与数值正确性以
-统一 DCU 环境的官方评测结果为准；当前对应结果为 68.0961，精度和 SLA
-扣分均为 0。
+设备端编译与数值正确性以统一 DCU 环境的官方评测结果为准。已验证安全版本
+`2f8800e` 的官方得分为 71.6201，精度和 SLA 扣分均为 0；当前 Piecewise
+Prefill Graph 实验仍需官方评测确认。
+
+## 生成式 AI 辅助披露
+
+本项目的方案分析、部分竞赛增量代码、测试、合规检查和文档由参赛队伍在
+OpenAI Codex 辅助下完成。队伍成员负责需求判断、代码审阅、设备部署、测试、
+官方提交和最终结果确认，并对提交内容承担责任。答辩材料中必须继续主动披露
+上述辅助范围，不得将 AI 辅助代码表述为完全独立手写。

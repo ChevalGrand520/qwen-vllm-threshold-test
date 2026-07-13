@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright 2026 T2026103389912286
+# Developed with OpenAI Codex assistance and reviewed by the contest team.
 
 from vllm.triton_utils import triton
 import triton.language as tl
