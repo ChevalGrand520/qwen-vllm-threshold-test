@@ -8,6 +8,7 @@ import torch
 
 from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
+from vllm.v1.attention.ops.prefix_prefill_tile import select_prefix_prefill_tile
 
 # Static kernels parameters
 BASE_BLOCK = 128 if current_platform.has_device_capability(80) else 64
@@ -785,16 +786,11 @@ def context_attention_fwd(
         extra_kargs = {}
 
     real_block_size = v_cache.shape[3]
-    is_pow2 = real_block_size > 0 and (real_block_size & (real_block_size - 1) == 0)
-    # For standard models involving powers of 2,
-    # follow the original logic (Llama 128/64)
-    # For non-standard models (Qwen3-next block_size 544), set to 32.
-    if is_pow2:
-        BLOCK_M = 128
-        BLOCK_N = 64
-    else:
-        BLOCK_M = 32
-        BLOCK_N = 32
+    BLOCK_M, BLOCK_N = select_prefix_prefill_tile(
+        real_block_size,
+        Lk,
+        is_rocm=current_platform.is_rocm(),
+    )
 
     # TRITON_BLOCK_SIZE is kept at 32 to ensure
     # correct alignment logic when the kernel handles
