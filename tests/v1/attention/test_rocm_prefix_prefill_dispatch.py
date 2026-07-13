@@ -24,7 +24,7 @@ def test_single_decode_capture_preserves_natural_3d_threshold():
     assert _select_seq_threshold_3d(64, [1], preserve_natural=False) == 1
 
 
-def test_qwen35_rocm_prefix_prefill_captures_single_decode_batch():
+def test_qwen35_rocm_prefix_prefill_uses_piecewise_prefill_graphs():
     config = MagicMock()
     config.model_config.hf_config.architectures = [
         "Qwen3_5ForConditionalGeneration"
@@ -39,7 +39,7 @@ def test_qwen35_rocm_prefix_prefill_captures_single_decode_batch():
 
     assert (
         config.compilation_config.cudagraph_mode
-        == CUDAGraphMode.FULL_DECODE_ONLY
+        == CUDAGraphMode.FULL_AND_PIECEWISE
     )
     assert config.compilation_config.max_cudagraph_capture_size == 1
     assert config.compilation_config.cudagraph_capture_sizes == [1]

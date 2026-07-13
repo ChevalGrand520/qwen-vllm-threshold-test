@@ -679,10 +679,10 @@ class RocmPlatform(Platform):
             and compilation_config.cudagraph_mode != CUDAGraphMode.NONE
         ):
             logger.warning_once(
-                "Restricting CUDA graph capture to single-request decode "
-                "while using the ROCm prefix-prefill path for Qwen3.5."
+                "Using piecewise prefill graphs and single-request full decode "
+                "capture with the ROCm prefix-prefill path for Qwen3.5."
             )
-            compilation_config.cudagraph_mode = CUDAGraphMode.FULL_DECODE_ONLY
+            compilation_config.cudagraph_mode = CUDAGraphMode.FULL_AND_PIECEWISE
             compilation_config.max_cudagraph_capture_size = 1
             compilation_config.cudagraph_capture_sizes = [1]
 
