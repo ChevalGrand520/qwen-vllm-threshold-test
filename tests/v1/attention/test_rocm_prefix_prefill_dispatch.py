@@ -18,7 +18,7 @@ from vllm.v1.attention.backends.triton_attn import (
 )
 
 
-def test_qwen35_rocm_prefix_prefill_disables_cudagraph_capture():
+def test_qwen35_rocm_prefix_prefill_captures_single_decode_batch():
     config = MagicMock()
     config.model_config.hf_config.architectures = [
         "Qwen3_5ForConditionalGeneration"
@@ -31,9 +31,12 @@ def test_qwen35_rocm_prefix_prefill_disables_cudagraph_capture():
 
     RocmPlatform.check_and_update_config(config)
 
-    assert config.compilation_config.cudagraph_mode == CUDAGraphMode.NONE
-    assert config.compilation_config.max_cudagraph_capture_size == 0
-    assert config.compilation_config.cudagraph_capture_sizes == []
+    assert (
+        config.compilation_config.cudagraph_mode
+        == CUDAGraphMode.FULL_DECODE_ONLY
+    )
+    assert config.compilation_config.max_cudagraph_capture_size == 1
+    assert config.compilation_config.cudagraph_capture_sizes == [1]
 
 
 @pytest.mark.parametrize(
