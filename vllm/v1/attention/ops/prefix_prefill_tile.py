@@ -19,3 +19,14 @@ def select_prefix_prefill_tile(
     if is_rocm and physical_block_size == 784 and head_size == 256:
         return 64, 32
     return 32, 32
+
+
+def select_prefix_prefill_num_unroll_cache(
+    physical_block_size: int,
+    head_size: int,
+    *,
+    is_rocm: bool,
+) -> int:
+    if is_rocm and physical_block_size == 784 and head_size == 256:
+        return 2
+    return 4

@@ -17,13 +17,13 @@ MODULE_PATH = (
 )
 
 
-def _load_tile_selector():
+def _load_tile_module():
     assert MODULE_PATH.exists(), "prefix prefill tile selector module must exist"
     spec = importlib.util.spec_from_file_location("prefix_prefill_tile", MODULE_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.select_prefix_prefill_tile
+    return module
 
 
 @pytest.mark.parametrize(
@@ -37,9 +37,33 @@ def _load_tile_selector():
     ],
 )
 def test_select_prefix_prefill_tile(physical_block_size, head_size, is_rocm, expected):
-    select_prefix_prefill_tile = _load_tile_selector()
+    select_prefix_prefill_tile = _load_tile_module().select_prefix_prefill_tile
     assert (
         select_prefix_prefill_tile(
+            physical_block_size,
+            head_size,
+            is_rocm=is_rocm,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("physical_block_size", "head_size", "is_rocm", "expected"),
+    [
+        (784, 256, True, 2),
+        (784, 256, False, 4),
+        (784, 128, True, 4),
+        (544, 256, True, 4),
+        (1024, 256, True, 4),
+    ],
+)
+def test_select_prefix_prefill_cache_unroll(
+    physical_block_size, head_size, is_rocm, expected
+):
+    select_cache_unroll = _load_tile_module().select_prefix_prefill_num_unroll_cache
+    assert (
+        select_cache_unroll(
             physical_block_size,
             head_size,
             is_rocm=is_rocm,

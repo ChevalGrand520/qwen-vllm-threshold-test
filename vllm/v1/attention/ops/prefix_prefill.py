@@ -8,7 +8,10 @@ import torch
 
 from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
-from vllm.v1.attention.ops.prefix_prefill_tile import select_prefix_prefill_tile
+from vllm.v1.attention.ops.prefix_prefill_tile import (
+    select_prefix_prefill_num_unroll_cache,
+    select_prefix_prefill_tile,
+)
 
 # Static kernels parameters
 BASE_BLOCK = 128 if current_platform.has_device_capability(80) else 64
@@ -791,6 +794,11 @@ def context_attention_fwd(
         Lk,
         is_rocm=current_platform.is_rocm(),
     )
+    num_unroll_cache = select_prefix_prefill_num_unroll_cache(
+        real_block_size,
+        Lk,
+        is_rocm=current_platform.is_rocm(),
+    )
 
     # TRITON_BLOCK_SIZE is kept at 32 to ensure
     # correct alignment logic when the kernel handles
@@ -848,7 +856,7 @@ def context_attention_fwd(
         USE_FP8=fp8_out_scale is not None,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
-        num_unroll_cache=4,
+        num_unroll_cache=num_unroll_cache,
         num_unroll_request=1,
         num_warps=4,
         num_stages=1,
