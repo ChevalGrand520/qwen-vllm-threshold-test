@@ -12,10 +12,16 @@ from vllm.platforms.rocm import RocmPlatform
 from vllm.v1.attention.backends import triton_attn
 from vllm.v1.attention.backends.triton_attn import (
     TritonAttentionImpl,
+    _select_seq_threshold_3d,
     _shift_prefill_query_start_loc,
     _should_use_rocm_prefix_prefill,
     _view_rocm_prefix_kv_cache,
 )
+
+
+def test_single_decode_capture_preserves_natural_3d_threshold():
+    assert _select_seq_threshold_3d(64, [1], preserve_natural=True) == 64
+    assert _select_seq_threshold_3d(64, [1], preserve_natural=False) == 1
 
 
 def test_qwen35_rocm_prefix_prefill_captures_single_decode_batch():

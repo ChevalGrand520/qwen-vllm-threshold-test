@@ -47,6 +47,17 @@ MIN_LAUNCH_GRID_SIZE_2D = 128  # Minimum launch grid size of 2D kernel
 NUM_PAR_SOFTMAX_SEGMENTS = 16  # Number of parallel tiled softmax segments
 
 
+def _select_seq_threshold_3d(
+    natural_threshold: int,
+    capture_sizes: list[int],
+    *,
+    preserve_natural: bool,
+) -> int:
+    if preserve_natural and max(capture_sizes) < natural_threshold:
+        return natural_threshold
+    return min(capture_sizes, key=lambda size: abs(size - natural_threshold))
+
+
 def _should_use_rocm_prefix_prefill(
     *,
     is_rocm: bool,
@@ -217,12 +228,12 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
             capture_sizes = self.vllm_config.compilation_config.cudagraph_capture_sizes
             assert capture_sizes, "CUDA Graphs enabled but no capture sizes specified."
 
-            # Select the CUDA Graph capture size closest to self.seq_threshold_3D
-            # as threshold. This ensures that each captured graph covers the
-            # correct execution path.
-            self.seq_threshold_3D = min(
+            # Keep small ROCm captures on the natural 3D path. Otherwise align
+            # the threshold to a captured size so each graph has a stable path.
+            self.seq_threshold_3D = _select_seq_threshold_3d(
+                self.seq_threshold_3D,
                 capture_sizes,
-                key=lambda x: abs(x - self.seq_threshold_3D),
+                preserve_natural=current_platform.is_rocm(),
             )
 
         self.num_par_softmax_segments = NUM_PAR_SOFTMAX_SEGMENTS
