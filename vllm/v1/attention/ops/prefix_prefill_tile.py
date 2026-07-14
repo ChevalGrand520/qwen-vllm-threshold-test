@@ -30,3 +30,12 @@ def select_prefix_prefill_num_unroll_cache(
     if is_rocm and physical_block_size == 784 and head_size == 256:
         return 1
     return 4
+
+
+def select_prefix_prefill_page_address_fastpath(
+    physical_block_size: int,
+    head_size: int,
+    *,
+    is_rocm: bool,
+) -> bool:
+    return is_rocm and physical_block_size == 784 and head_size == 256

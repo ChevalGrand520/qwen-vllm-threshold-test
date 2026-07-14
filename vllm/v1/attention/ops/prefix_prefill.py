@@ -10,6 +10,7 @@ from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
 from vllm.v1.attention.ops.prefix_prefill_tile import (
     select_prefix_prefill_num_unroll_cache,
+    select_prefix_prefill_page_address_fastpath,
     select_prefix_prefill_tile,
 )
 
@@ -88,6 +89,7 @@ def _fwd_kernel(
     SLIDING_WINDOW: tl.constexpr,
     num_unroll_cache: tl.constexpr,
     num_unroll_request: tl.constexpr,
+    USE_PAGE_ADDRESS_FASTPATH: tl.constexpr,
     SKIP_DECODE: tl.constexpr,
     USE_SINKS: tl.constexpr,
     USE_FP8: tl.constexpr,
@@ -159,21 +161,41 @@ def _fwd_kernel(
     for start_n in tl.range(
         0, cur_batch_ctx_len, BLOCK_SIZE, loop_unroll_factor=num_unroll_cache
     ):
-        # Under a block size of 544 (Qwen/Qwen3-Next-80B-A3B-Thinking),
-        # replace one physical block every 17 32-Tile blocks
-        # Calculate the logical block index of each of the 32 tokens
-        # in the current Tile (handling cross-block cases).
         token_indices = start_n + offs_bs_n
-        bn_logical_indices = token_indices // PHYSICAL_BLOCK_SIZE
-
-        # 2. Vectorized loading of physical block IDs from B_Loc
-        bn = tl.load(
-            B_Loc + cur_batch * stride_b_loc_b + bn_logical_indices * stride_b_loc_s
-        ).to(tl.int64)
-
-        # 3. Calculate the exact offset of
-        # each token within its physical block.
-        internal_offsets = token_indices % PHYSICAL_BLOCK_SIZE
+        if USE_PAGE_ADDRESS_FASTPATH:
+            # A 32-token tile crosses a 784-token page only once every 49
+            # iterations. Reconstruct its vector mapping from at most two
+            # scalar block-table loads instead of vector integer div/rem.
+            logical_block = start_n // PHYSICAL_BLOCK_SIZE
+            internal_start = start_n - logical_block * PHYSICAL_BLOCK_SIZE
+            block_table_ptr = (
+                B_Loc + cur_batch * stride_b_loc_b + logical_block * stride_b_loc_s
+            )
+            current_block = tl.load(block_table_ptr).to(tl.int64)
+            next_page_start = start_n + PHYSICAL_BLOCK_SIZE - internal_start
+            crosses_page = (internal_start + BLOCK_SIZE > PHYSICAL_BLOCK_SIZE) & (
+                next_page_start < cur_batch_ctx_len
+            )
+            next_block = tl.load(
+                block_table_ptr + stride_b_loc_s,
+                mask=crosses_page,
+                other=0,
+            ).to(tl.int64)
+            next_page_mask = internal_start + offs_bs_n >= PHYSICAL_BLOCK_SIZE
+            bn = tl.where(next_page_mask, next_block, current_block)
+            internal_offsets = internal_start + offs_bs_n
+            internal_offsets = tl.where(
+                next_page_mask,
+                internal_offsets - PHYSICAL_BLOCK_SIZE,
+                internal_offsets,
+            )
+        else:
+            # Vector mapping handles arbitrary non-standard physical pages.
+            bn_logical_indices = token_indices // PHYSICAL_BLOCK_SIZE
+            bn = tl.load(
+                B_Loc + cur_batch * stride_b_loc_b + bn_logical_indices * stride_b_loc_s
+            ).to(tl.int64)
+            internal_offsets = token_indices % PHYSICAL_BLOCK_SIZE
 
         # Addressing of K (5D)
         off_k = (
@@ -799,6 +821,11 @@ def context_attention_fwd(
         Lk,
         is_rocm=current_platform.is_rocm(),
     )
+    use_page_address_fastpath = select_prefix_prefill_page_address_fastpath(
+        real_block_size,
+        Lk,
+        is_rocm=current_platform.is_rocm(),
+    )
 
     # TRITON_BLOCK_SIZE is kept at 32 to ensure
     # correct alignment logic when the kernel handles
@@ -858,6 +885,7 @@ def context_attention_fwd(
         BLOCK_N=BLOCK_N,
         num_unroll_cache=num_unroll_cache,
         num_unroll_request=1,
+        USE_PAGE_ADDRESS_FASTPATH=use_page_address_fastpath,
         num_warps=4,
         num_stages=1,
         USE_SINKS=sinks is not None,
