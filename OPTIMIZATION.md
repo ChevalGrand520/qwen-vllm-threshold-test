@@ -11,9 +11,13 @@
 | up 支路保留 BF16 | 15.32 | 11.80 | 6.73 | 0.0 | 68.0961 |
 | ROCm Prefix + 单请求 Decode Graph 初版 | 15.94 | 12.69 | 7.40 | 0.5367 | 71.0277 |
 | 保留自然 3D/2D Attention 阈值 | 15.97 | 12.66 | 7.45 | 0.0 | 71.6201 |
+| page784 Prefix query tile `64x32` | 16.23 | 13.74 | 9.13 | 0.0 | 76.2214 |
+| page784 cache-loop unroll `2` | 16.09 | 14.10 | 10.16 | 0.0 | 77.8698 |
 
-已验证安全版本为 `2f8800e`，对应最后一行结果，没有 SLA 或精度扣分。
-当前分支在该版本上实验 Piecewise Prefill Graph，尚待官方评测确认。
+当前已验证安全版本为 `d42b814`，对应最后一行结果，没有 SLA 或精度扣分。
+官方 `main` 上另有 cache-loop unroll `1` 单变量实验 `ab6f410`，尚待官方结果。
+本分支从安全版本独立创建，只实验 page784 KV 地址生成快路径，不与未验证的
+unroll `1` 叠加。
 
 ## 2. 改动概览
 
@@ -78,13 +82,31 @@ batch scheduler。
 ### 2.6 Qwen3.5 CUDA Graph 范围
 
 Qwen3.5 在 ROCm 上把 Full Decode Graph 捕获范围限制为单请求 `[1]`，与初赛
-固定并发 1 一致。安全版本 `2f8800e` 使用 `FULL_DECODE_ONLY`；当前实验分支使用
-`FULL_AND_PIECEWISE`，尝试让非 Attention Prefill 片段进入 Piecewise Graph，
-同时仍将 Full Graph 最大捕获批次固定为 1。
+固定并发 1 一致。早期安全版本 `2f8800e` 使用 `FULL_DECODE_ONLY`；后续官方已验证
+`FULL_AND_PIECEWISE` 路径，并继续把 Prefix 内核限制在纯 Prefill 批次。Full Graph
+最大捕获批次仍固定为 1。
 
 涉及文件：
 
 - `vllm/platforms/rocm.py`
+
+### 2.7 page784 Prefix tile 与 KV 地址快路径
+
+Qwen3.5 的混合缓存物理 Attention page 为 784 token。已验证版本把 Prefix Prefill
+query tile 从 `32x32` 扩为 `64x32`，并把 cache-loop unroll 从 4 降为 2，减少长
+上下文下的程序数量、代码体积和寄存器压力。
+
+本实验分支进一步保持 `64x32`、unroll 2 和全部 Attention 数学不变，只优化
+block table 地址生成。32-token cache tile 的起点相对 784-token page 每 49 次循环
+才跨页一次。快路径使用当前页和按需加载的下一页两个标量 block id 重建原向量
+映射，替代每个 token 的向量整数除法、取模和重复 block-table 读取。跨页 token、
+尾部 mask、K/V 加载顺序与 Softmax 归约顺序均不变。
+
+涉及文件：
+
+- `vllm/v1/attention/ops/prefix_prefill.py`
+- `vllm/v1/attention/ops/prefix_prefill_tile.py`
+- `tests/v1/attention/test_prefix_prefill_tile.py`
 
 ## 3. 合规边界
 
@@ -111,11 +133,15 @@ python -m py_compile \
   vllm/model_executor/warmup/kernel_warmup.py \
   vllm/platforms/rocm.py \
   vllm/v1/attention/backends/triton_attn.py \
+  vllm/v1/attention/ops/prefix_prefill.py \
+  vllm/v1/attention/ops/prefix_prefill_tile.py \
+  tests/v1/attention/test_prefix_prefill_tile.py \
   tests/v1/attention/test_rocm_prefix_prefill_dispatch.py
 ```
 
 设备端编译、吞吐和精度以比赛统一 DCU 环境的官方结果为准。当前已验证安全版
-官方得分为 71.6201；Piecewise Prefill Graph 实验尚无官方结果。
+官方得分为 77.8698。本地址快路径必须先在 BW1000 上通过 page 边界 bit-exact
+检查，并在六组中长上下文 A/B 中稳定提速，才能进入官方提交候选。
 
 ## 5. 来源说明
 

@@ -28,6 +28,11 @@ ROCm Prefix Prefill 路径只在纯 Prefill 批次中替换 Attention 内核；D
 混合批次仍走原始 Triton Unified Attention。该路径没有修改 batch scheduler，
 也没有调整 `max-model-len`、`max-num-seqs`、`max-num-batched-tokens` 等锁定参数。
 
+page784 地址快路径只替换 Prefix Prefill 内核内的 KV block-table 地址计算。它按
+原公式重建每个 token 的物理 block id 和页内偏移，不改变 K/V 数据、Attention
+矩阵、Softmax 归约顺序、输出类型或请求调度；非 ROCm、非 page784、非 head256
+配置继续使用原路径。
+
 `qwen3_5.py` 和 `qwen3_next.py` 中仍可看到 vLLM 上游对 speculative config、
 MTP 权重和 scheduler config 的通用兼容代码。这些代码在队伍增量之前已经
 存在；本提交没有启用相应能力，`serve_args.txt` 也未包含相关参数。
@@ -42,8 +47,9 @@ MTP 权重和 scheduler config 的通用兼容代码。这些代码在队伍增�
 - 发布历史、路径和增量文件中的工具命名扫描
 
 设备端编译与数值正确性以统一 DCU 环境的官方评测结果为准。已验证安全版本
-`2f8800e` 的官方得分为 71.6201，精度和 SLA 扣分均为 0；当前 Piecewise
-Prefill Graph 实验仍需官方评测确认。
+`d42b814` 的官方得分为 77.8698，精度和 SLA 扣分均为 0。当前 `ab6f410`
+unroll1 与本分支 page784 地址快路径均属于未升级安全点的独立实验，只有通过
+设备端验证和官方零扣分结果后才能替代 `d42b814`。
 
 ## 生成式 AI 辅助披露
 
