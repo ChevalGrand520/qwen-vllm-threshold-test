@@ -1,4 +1,19 @@
 <!-- markdownlint-disable MD001 MD041 -->
+
+> **2026 先导杯参赛提交与知识产权声明**
+>
+> 本仓库基于比赛指定的开源项目
+> [vLLM](https://github.com/vllm-project/vllm) 修改，沿用其 Apache-2.0
+> 许可证和原始文件版权声明。仓库继承使用 PyTorch、Triton、Transformers、
+> Qwen 模型适配代码以及 vLLM 已包含的 Flash Linear Attention 相关代码；
+> 相应来源和许可证保留在 `LICENSE`、依赖元数据及各源码文件头部。
+> 本次竞赛增量没有复制新的第三方或外部源码；方案分析、部分增量代码、测试和
+> 文档由参赛队伍在 **OpenAI Codex 辅助下**完成，并由队伍成员审阅、部署和验证。
+> 比赛指定的 Qwen3.5-27B 权重由平台提供，不在本仓库中分发；本方案未训练、
+> 微调、剪枝或持久化量化模型权重。详细交付、编译、运行和来源说明见
+> [`SUBMISSION_GUIDE.md`](SUBMISSION_GUIDE.md)、
+> [`OPTIMIZATION.md`](OPTIMIZATION.md) 与 [`COMPLIANCE.md`](COMPLIANCE.md)。
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-dark.png">

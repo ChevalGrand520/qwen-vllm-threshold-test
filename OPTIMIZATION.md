@@ -13,11 +13,12 @@
 | 保留自然 3D/2D Attention 阈值 | 15.97 | 12.66 | 7.45 | 0.0 | 71.6201 |
 | page784 Prefix query tile `64x32` | 16.23 | 13.74 | 9.13 | 0.0 | 76.2214 |
 | page784 cache-loop unroll `2` | 16.09 | 14.10 | 10.16 | 0.0 | 77.8698 |
+| page784 unroll `1` + KV 地址快路径 | 16.42 | 14.84 | 11.40 | 0.0 | 80.2281 |
 
-当前已验证安全版本为 `d42b814`，对应最后一行结果，没有 SLA 或精度扣分。
-官方 `main` 上另有 cache-loop unroll `1` 单变量实验 `ab6f410`，尚待官方结果。
-本分支从安全版本独立创建，只实验 page784 KV 地址生成快路径，不与未验证的
-unroll `1` 叠加。
+当前已验证安全性能实现为 `1f70f91080e0dbd976bab551f7544d4f19ca128c`，
+对应最后一行结果，SLA 与精度扣分均为 0。安全分支
+`best-compliant-80.2281-0714` 保留同一提交。此前的 unroll `1`、地址快路径和
+cache64 均先在独立分支验证；最终版本只合并已通过设备门禁和官方评测的组合。
 
 ## 2. 改动概览
 
@@ -92,12 +93,12 @@ Qwen3.5 在 ROCm 上把 Full Decode Graph 捕获范围限制为单请求 `[1]`�
 
 ### 2.7 page784 Prefix tile 与 KV 地址快路径
 
-Qwen3.5 的混合缓存物理 Attention page 为 784 token。已验证版本把 Prefix Prefill
-query tile 从 `32x32` 扩为 `64x32`，并把 cache-loop unroll 从 4 降为 2，减少长
+Qwen3.5 的混合缓存物理 Attention page 为 784 token。最终版本把 Prefix Prefill
+query tile 从 `32x32` 扩为 `64x32`，并把 cache-loop unroll 从 4 降为 1，减少长
 上下文下的程序数量、代码体积和寄存器压力。
 
-本实验分支在 `64x32` 基础上组合两个已隔离的编译/地址优化：cache-loop unroll
-从 2 降为 1；block table 地址生成使用 page784 快路径。32-token cache tile 的
+最终版本在 `64x32` 基础上组合两个已隔离验证的编译/地址优化：cache-loop unroll
+设为 1；block table 地址生成使用 page784 快路径。32-token cache tile 的
 起点相对 784-token page 每 49 次循环才跨页一次，快路径使用当前页和按需加载的
 下一页两个标量 block id 重建原向量映射，替代每个 token 的向量整数除法、取模
 和重复 block-table 读取。跨页 token、尾部 mask、K/V 加载顺序与 Softmax 归约
@@ -122,7 +123,7 @@ BW1000 设备端 A/B 结果（Best77 `64x32`、unroll 2、warps 4 为基线）�
 
 六形状几何平均加速 `1.0615x`，最差形状 `1.0603x`。context 769、783、784、
 785、799、800、1567、1568、1569 的页边界输出均 bit-exact；远端聚焦测试
-`36 passed`。候选满足进入官方单变量评测的设备门禁。
+`36 passed`。该组合随后通过官方端到端评测，得到 80.2281 分且无 SLA、精度扣分。
 
 同一设备的八配置矩阵进一步验证组合效果：
 
@@ -135,7 +136,7 @@ BW1000 设备端 A/B 结果（Best77 `64x32`、unroll 2、warps 4 为基线）�
 | 组合 + 2 warps | 0.8496x | 0.7641x | 0 |
 
 矩阵赢家为 4 warps、unroll1、地址快路径组合。2/8 warps 不再推进。设备 kernel
-收益不等同于整服务吞吐，仍需以单变量官方结果确认端到端增益。
+收益最终由官方端到端结果 `16.42 / 14.84 / 11.40` 确认。
 
 ## 3. 合规边界
 
@@ -168,12 +169,35 @@ python -m py_compile \
   tests/v1/attention/test_rocm_prefix_prefill_dispatch.py
 ```
 
-设备端编译、吞吐和精度以比赛统一 DCU 环境的官方结果为准。当前已验证安全版
-官方得分为 77.8698。本组合已通过 BW1000 page 边界 bit-exact、六组 A/B 和八
-配置矩阵门禁；尚未取得官方端到端分数，不能替代安全版本。
+设备端编译、吞吐和精度以比赛统一 DCU 环境的官方结果为准。当前最终性能实现
+`1f70f91` 已通过 BW1000 page 边界 bit-exact、六组 A/B、八配置矩阵和官方
+端到端评测，得分 80.2281，SLA 与精度扣分均为 0。
 
 ## 5. 来源说明
 
 项目主体沿用比赛指定的 vLLM 源码及其原始 Apache-2.0 许可和文件头说明。
-本说明列出的增量实现由参赛队伍在 OpenAI Codex 辅助下完成并由队伍审阅；
-未引入新的第三方源码。AI 辅助范围还需在答辩中主动披露。
+继承依赖包括 PyTorch、Triton、Transformers、Qwen 模型适配代码，以及 vLLM
+上游已包含并在源码头部注明来源的 Flash Linear Attention 代码。本次竞赛增量
+未复制新的第三方源码。增量实现、测试和本文档由参赛队伍在 OpenAI Codex
+辅助下完成并由队伍审阅；AI 辅助范围还需在答辩中主动披露。
+
+## 6. 模型、源码与权重交付说明
+
+- 本赛题方案不进行轻量模型训练、微调、蒸馏、剪枝或持久化权重量化。
+- Qwen3.5-27B 模型权重由比赛平台提供，保持原格式和数值，不提交到本 Git 仓库。
+- 本仓库提交完整的推理优化源码、测试、`serve_args.txt`、优化说明和合规说明。
+- 主要代码模块、文件清单和复现步骤见 `SUBMISSION_GUIDE.md`。
+
+## 7. 编译与运行摘要
+
+在组委会提供的 ROCm/DCU 基础镜像中保留其预装 PyTorch 与驱动，执行：
+
+```bash
+cd /path/to/qwen-vllm-xiandao-2026
+python3 setup.py bdist_wheel
+python3 -m pip install --force-reinstall dist/vllm-*.whl --no-deps
+```
+
+模型目录由平台挂载。正式评测必须沿用平台锁定的模型、tokenizer、上下文长度、
+batch、采样参数和服务接口；本仓库只通过 `serve_args.txt` 启用已说明的编译
+custom op。完整启动、健康检查、模块清单和故障排查见 `SUBMISSION_GUIDE.md`。
