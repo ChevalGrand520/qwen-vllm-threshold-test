@@ -28,5 +28,5 @@ def select_prefix_prefill_num_unroll_cache(
     is_rocm: bool,
 ) -> int:
     if is_rocm and physical_block_size == 784 and head_size == 256:
-        return 2
+        return 1
     return 4

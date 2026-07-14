@@ -51,7 +51,7 @@ def test_select_prefix_prefill_tile(physical_block_size, head_size, is_rocm, exp
 @pytest.mark.parametrize(
     ("physical_block_size", "head_size", "is_rocm", "expected"),
     [
-        (784, 256, True, 2),
+        (784, 256, True, 1),
         (784, 256, False, 4),
         (784, 128, True, 4),
         (544, 256, True, 4),
