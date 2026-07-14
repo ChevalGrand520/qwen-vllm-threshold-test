@@ -47,6 +47,7 @@ MTP 权重和 scheduler config 的通用兼容代码。这些代码在队伍增�
 - 发布历史、路径和增量文件中的工具命名扫描
 - BW1000 page784 九个页边界 bit-exact 检查
 - BW1000 六组中长上下文 A/B：geomean `1.0615x`、worst `1.0603x`
+- BW1000 八配置矩阵：组合 geomean `1.9716x`、worst `1.8397x`
 - SCNet 聚焦测试：`36 passed`
 
 设备端编译与数值正确性以统一 DCU 环境的官方评测结果为准。已验证安全版本
