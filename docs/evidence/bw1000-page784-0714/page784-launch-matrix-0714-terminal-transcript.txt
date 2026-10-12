@@ -1,0 +1,101 @@
+###############################################################################
+Last login: Mon Jul 13 20:35:40 2026 from 173.10.224.0
+WARNING: /opt/hyhal/lib/cmake/rocm_smi doesn't exist, please install the latest driver(version >= 6.3.15)
+The rocm_smi_lib will be used in default
+WARNING: /opt/hyhal/lib/cmake/rocm_smi doesn't exist, please install the latest driver(version >= 6.3.15)
+The rocm_smi_lib will be used in default
+root@worker-0:~# SCRIPT=/public/home/xdzs2026_c337/upload-0712/xiandao-page784-launch-matrix-0714.sh
+root@worker-0:~# 
+root@worker-0:~# sed -i 's/\r$//' "$SCRIPT"
+root@worker-0:~# 
+root@worker-0:~# sha256sum "$SCRIPT"
+0f36865fc0de57f5ae9a1cff6027b63fc380faa8013e6edf1b5c66749d1f9f14  /public/home/xdzs2026_c337/upload-0712/xiandao-page784-launch-matrix-0714.sh
+root@worker-0:~# 
+root@worker-0:~# bash "$SCRIPT"
+remote: Enumerating objects: 33, done.
+remote: Counting objects: 100% (33/33), done.
+remote: Compressing objects: 100% (23/23), done.
+remote: Total 23 (delta 20), reused 0 (delta 0), pack-reused 0
+Unpacking objects: 100% (23/23), 3.02 KiB | 0 bytes/s, done.
+From https://gitlab.eduxiji.net/T2026103389912286/qwen-vllm-xiandao-2026
+ * branch            rocm-page784-unroll1-address-fastpath-0714 -> FETCH_HEAD
+ * [new branch]      rocm-page784-unroll1-address-fastpath-0714 -> xiandao/rocm-page784-unroll1-address-fastpath-0714
+Preparing worktree (detached HEAD 97b2998)
+Updating files: 100% (4295/4295), done.
+HEAD is now at 97b2998 optimize ROCm page784 cache addressing
+....................................                                                                                                                                    [100%]
+============================================================================== warnings summary ===============================================================================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../usr/local/lib/python3.10/dist-packages/torch/jit/_script.py:362: 14 warnings
+  /usr/local/lib/python3.10/dist-packages/torch/jit/_script.py:362: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+36 passed, 16 warnings in 24.18s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+model heads=24 kv_heads=4 head_dim=256 physical_page=784 tile=64x32 configs=8
+query=2048 ctx= 4096 best77     ms=   19.802 speedup= 1.0000x max_abs_diff=0.000e+00
+query=2048 ctx= 4096 unroll1    ms=   11.839 speedup= 1.6727x max_abs_diff=0.000e+00
+query=2048 ctx= 4096 address    ms=   18.613 speedup= 1.0639x max_abs_diff=0.000e+00
+query=2048 ctx= 4096 combo      ms=   10.314 speedup= 1.9199x max_abs_diff=0.000e+00
+query=2048 ctx= 4096 address_w2 ms=   37.900 speedup= 0.5225x max_abs_diff=0.000e+00
+query=2048 ctx= 4096 combo_w2   ms=   23.949 speedup= 0.8268x max_abs_diff=0.000e+00
+query=2048 ctx= 4096 address_w8 ms=   23.981 speedup= 0.8257x max_abs_diff=0.000e+00
+query=2048 ctx= 4096 combo_w8   ms=   18.170 speedup= 1.0898x max_abs_diff=0.000e+00
+query=2048 ctx=12288 best77     ms=   56.427 speedup= 1.0000x max_abs_diff=0.000e+00
+query=2048 ctx=12288 unroll1    ms=   32.934 speedup= 1.7133x max_abs_diff=0.000e+00
+query=2048 ctx=12288 address    ms=   53.105 speedup= 1.0626x max_abs_diff=0.000e+00
+query=2048 ctx=12288 combo      ms=   27.978 speedup= 2.0168x max_abs_diff=0.000e+00
+query=2048 ctx=12288 address_w2 ms=  101.423 speedup= 0.5563x max_abs_diff=0.000e+00
+query=2048 ctx=12288 combo_w2   ms=   64.178 speedup= 0.8792x max_abs_diff=0.000e+00
+query=2048 ctx=12288 address_w8 ms=   66.640 speedup= 0.8467x max_abs_diff=0.000e+00
+query=2048 ctx=12288 combo_w8   ms=   49.746 speedup= 1.1343x max_abs_diff=0.000e+00
+query=2048 ctx=28672 best77     ms=  129.618 speedup= 1.0000x max_abs_diff=0.000e+00
+query=2048 ctx=28672 unroll1    ms=   75.280 speedup= 1.7218x max_abs_diff=0.000e+00
+query=2048 ctx=28672 address    ms=  122.207 speedup= 1.0606x max_abs_diff=0.000e+00
+query=2048 ctx=28672 combo      ms=   63.298 speedup= 2.0478x max_abs_diff=0.000e+00
+query=2048 ctx=28672 address_w2 ms=  229.120 speedup= 0.5657x max_abs_diff=0.000e+00
+query=2048 ctx=28672 combo_w2   ms=  145.032 speedup= 0.8937x max_abs_diff=0.000e+00
+query=2048 ctx=28672 address_w8 ms=  152.037 speedup= 0.8525x max_abs_diff=0.000e+00
+query=2048 ctx=28672 combo_w8   ms=  112.766 speedup= 1.1494x max_abs_diff=0.000e+00
+query=4096 ctx= 4096 best77     ms=   41.365 speedup= 1.0000x max_abs_diff=0.000e+00
+query=4096 ctx= 4096 unroll1    ms=   24.876 speedup= 1.6628x max_abs_diff=0.000e+00
+query=4096 ctx= 4096 address    ms=   38.885 speedup= 1.0638x max_abs_diff=0.000e+00
+query=4096 ctx= 4096 combo      ms=   22.484 speedup= 1.8397x max_abs_diff=0.000e+00
+query=4096 ctx= 4096 address_w2 ms=   85.427 speedup= 0.4842x max_abs_diff=0.000e+00
+query=4096 ctx= 4096 combo_w2   ms=   54.133 speedup= 0.7641x max_abs_diff=0.000e+00
+query=4096 ctx= 4096 address_w8 ms=   52.243 speedup= 0.7918x max_abs_diff=0.000e+00
+query=4096 ctx= 4096 combo_w8   ms=   40.452 speedup= 1.0226x max_abs_diff=0.000e+00
+query=4096 ctx=12288 best77     ms=  114.486 speedup= 1.0000x max_abs_diff=0.000e+00
+query=4096 ctx=12288 unroll1    ms=   66.485 speedup= 1.7220x max_abs_diff=0.000e+00
+query=4096 ctx=12288 address    ms=  107.904 speedup= 1.0610x max_abs_diff=0.000e+00
+query=4096 ctx=12288 combo      ms=   57.781 speedup= 1.9814x max_abs_diff=0.000e+00
+query=4096 ctx=12288 address_w2 ms=  211.561 speedup= 0.5411x max_abs_diff=0.000e+00
+query=4096 ctx=12288 combo_w2   ms=  134.043 speedup= 0.8541x max_abs_diff=0.000e+00
+query=4096 ctx=12288 address_w8 ms=  138.272 speedup= 0.8280x max_abs_diff=0.000e+00
+query=4096 ctx=12288 combo_w8   ms=  103.471 speedup= 1.1065x max_abs_diff=0.000e+00
+query=4096 ctx=28672 best77     ms=  261.262 speedup= 1.0000x max_abs_diff=0.000e+00
+query=4096 ctx=28672 unroll1    ms=  150.018 speedup= 1.7415x max_abs_diff=0.000e+00
+query=4096 ctx=28672 address    ms=  245.824 speedup= 1.0628x max_abs_diff=0.000e+00
+query=4096 ctx=28672 combo      ms=  128.555 speedup= 2.0323x max_abs_diff=0.000e+00
+query=4096 ctx=28672 address_w2 ms=  464.845 speedup= 0.5620x max_abs_diff=0.000e+00
+query=4096 ctx=28672 combo_w2   ms=  294.497 speedup= 0.8871x max_abs_diff=0.000e+00
+query=4096 ctx=28672 address_w8 ms=  310.224 speedup= 0.8422x max_abs_diff=0.000e+00
+query=4096 ctx=28672 combo_w8   ms=  229.828 speedup= 1.1368x max_abs_diff=0.000e+00
+summary:
+combo      warps=4 unroll=1 fastpath=True geomean=1.9716x worst=1.8397x max_abs_diff=0.000e+00
+unroll1    warps=4 unroll=1 fastpath=False geomean=1.7055x worst=1.6628x max_abs_diff=0.000e+00
+combo_w8   warps=8 unroll=1 fastpath=True geomean=1.1057x worst=1.0226x max_abs_diff=0.000e+00
+address    warps=4 unroll=2 fastpath=True geomean=1.0624x worst=1.0606x max_abs_diff=0.000e+00
+best77     warps=4 unroll=2 fastpath=False geomean=1.0000x worst=1.0000x max_abs_diff=0.000e+00
+combo_w2   warps=2 unroll=1 fastpath=True geomean=0.8496x worst=0.7641x max_abs_diff=0.000e+00
+address_w8 warps=8 unroll=2 fastpath=True geomean=0.8309x worst=0.7918x max_abs_diff=0.000e+00
+address_w2 warps=2 unroll=2 fastpath=True geomean=0.5379x worst=0.4842x max_abs_diff=0.000e+00
+MATRIX_WINNER=combo
+Results saved to /public/home/xdzs2026_c337/page784-launch-matrix-0714.log
+root@worker-0:~# 

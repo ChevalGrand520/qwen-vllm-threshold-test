@@ -12,7 +12,8 @@
 > 比赛指定的 Qwen3.5-27B 权重由平台提供，不在本仓库中分发；本方案未训练、
 > 微调、剪枝或持久化量化模型权重。详细交付、编译、运行和来源说明见
 > [`SUBMISSION_GUIDE.md`](SUBMISSION_GUIDE.md)、
-> [`OPTIMIZATION.md`](OPTIMIZATION.md) 与 [`COMPLIANCE.md`](COMPLIANCE.md)。
+> [`OPTIMIZATION.md`](OPTIMIZATION.md)、[`COMPLIANCE.md`](COMPLIANCE.md) 与
+> [`BW1000 原始实验证据`](docs/evidence/bw1000-page784-0714/README.md)。
 
 <p align="center">
   <picture>

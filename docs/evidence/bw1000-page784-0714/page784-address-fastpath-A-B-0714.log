@@ -1,0 +1,25 @@
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+36 passed, 16 warnings in 22.11s
+sys:1: DeprecationWarning: builtin type swigvarlink has no **module** attribute
+model heads=24 kv_heads=4 head_dim=256 physical_page=784 tile=64x32 unroll=2 warps=4
+boundary correctness:
+ctx= 769 max_abs_diff=0.000e+00
+ctx= 783 max_abs_diff=0.000e+00
+ctx= 784 max_abs_diff=0.000e+00
+ctx= 785 max_abs_diff=0.000e+00
+ctx= 799 max_abs_diff=0.000e+00
+ctx= 800 max_abs_diff=0.000e+00
+ctx=1567 max_abs_diff=0.000e+00
+ctx=1568 max_abs_diff=0.000e+00
+ctx=1569 max_abs_diff=0.000e+00
+performance:
+query=2048 ctx= 4096 baseline_ms=   19.720 fast_ms=   18.594 speedup= 1.0606x max_abs_diff=0.000e+00
+query=2048 ctx=12288 baseline_ms=   56.226 fast_ms=   53.027 speedup= 1.0603x max_abs_diff=0.000e+00
+query=2048 ctx=28672 baseline_ms=  129.469 fast_ms=  122.026 speedup= 1.0610x max_abs_diff=0.000e+00
+query=4096 ctx= 4096 baseline_ms=   41.297 fast_ms=   38.827 speedup= 1.0636x max_abs_diff=0.000e+00
+query=4096 ctx=12288 baseline_ms=  114.495 fast_ms=  107.834 speedup= 1.0618x max_abs_diff=0.000e+00
+query=4096 ctx=28672 baseline_ms=  260.937 fast_ms=  245.793 speedup= 1.0616x max_abs_diff=0.000e+00
+summary geomean_speedup=1.0615x worst_speedup=1.0603x max_abs_diff=0.000e+00
+CANDIDATE_READY_FOR_OFFICIAL_REVIEW
+Results saved to /public/home/xdzs2026_c337/page784-address-fastpath-microbench-0714.log
+root@worker-0:~# 
