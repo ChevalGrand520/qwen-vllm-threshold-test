@@ -37,5 +37,17 @@ def select_prefix_prefill_page_address_fastpath(
     head_size: int,
     *,
     is_rocm: bool,
+    tile_size: int = 32,
 ) -> bool:
-    return is_rocm and physical_block_size == 784 and head_size == 256
+    """Whether a tile can be mapped with at most two page-table entries.
+
+    The kernel walks fixed-size 32-token address tiles.  The mapping is valid
+    for any page at least as large as that tile; a page smaller than a tile
+    would require three or more page-table entries and stays on the reference
+    vector div/mod path.
+
+    ``head_size`` is retained in the signature for selector call-site
+    compatibility.  It does not affect the page arithmetic.
+    """
+    del head_size
+    return is_rocm and tile_size > 0 and physical_block_size >= tile_size

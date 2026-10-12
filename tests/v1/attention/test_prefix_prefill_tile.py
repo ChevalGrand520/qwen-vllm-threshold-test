@@ -77,9 +77,10 @@ def test_select_prefix_prefill_cache_unroll(
     [
         (784, 256, True, True),
         (784, 256, False, False),
-        (784, 128, True, False),
-        (544, 256, True, False),
-        (1024, 256, True, False),
+        (784, 128, True, True),
+        (544, 256, True, True),
+        (1024, 256, True, True),
+        (31, 256, True, False),
     ],
 )
 def test_select_prefix_prefill_page_address_fastpath(
@@ -115,3 +116,18 @@ def test_page784_fast_address_mapping_matches_divmod():
                 page_size,
             )
             assert (fast_block, fast_offset) == (expected_block, expected_offset)
+
+
+@pytest.mark.parametrize("page_size", [32, 33, 544, 784, 1024, 1568])
+def test_generic_fast_address_mapping_matches_divmod(page_size):
+    tile_size = 32
+    for start_n in range(0, page_size * 3, tile_size):
+        for token_offset in range(tile_size):
+            logical_block = start_n // page_size
+            internal_start = start_n - logical_block * page_size
+            crosses_page = internal_start + token_offset >= page_size
+            fast_block = logical_block + int(crosses_page)
+            fast_offset = internal_start + token_offset - int(crosses_page) * page_size
+            assert (fast_block, fast_offset) == divmod(
+                start_n + token_offset, page_size
+            )
